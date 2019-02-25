@@ -18,12 +18,12 @@ TODO
 import argparse
 import logging
 import subprocess
-import tarfile
 
 from boto.ec2 import connect_to_region as ec2_connect_to_region
 from boto.s3 import connect_to_region as s3_connect_to_region, key
 from datetime import datetime
 from os import listdir
+from glob import glob
 from pymongo import MongoClient
 
 # Leave these blank to just use IAM roles
@@ -271,8 +271,10 @@ class AwsMongoBackup(object):
             for database in backup_member_mongo.database_names():
                 if database not in args.exclude_dbs:
                     mongodump = 'mongodump -h {backup_member} -d {database} '\
-                                '-o {backup_member} --quiet'.format(
+                                '--gzip --quiet '\
+                                '--archive={backup_member}_{database}_{creation_time}.gz'.format(
                                     backup_member=backup_member[0],
+                                    creation_time=self.creation_time,
                                     database=database
                                 )
                     mongodump = mongodump.split(' ')
@@ -287,21 +289,17 @@ class AwsMongoBackup(object):
                 self.logger.debug('Unfreezing replica set')
                 backup_member_mongo.admin.command({'replSetFreeze': 0})
 
-        # Archive and upload to S3
+        # Upload to S3
         if self.dryrun:
             self.logger.debug("Would have archived dumps and uploaded to S3")
         else:
-            self.logger.debug("Archiving dumps and uploading to S3")
-            dumps = listdir(backup_member[0])
+            self.logger.debug("Uploading archived dumps to S3")
+            dumps = glob('*.gz')
             for dump in dumps:
-                archive_path = backup_member[0] + '/' + dump
-                archive_name = dump + '_' + self.creation_time + '.tar.gz'
-                with tarfile.open(archive_name, 'w:gz') as tar:
-                    tar.add(archive_path, arcname=dump)
                 bucket = self.s3.get_bucket(s3_bucket_name)
                 key_obj = key.Key(bucket)
-                key_obj.key = s3_bucket_dest_dir + '/' + archive_name
-                key_obj.set_contents_from_filename(archive_name)
+                key_obj.key = s3_bucket_dest_dir + '/' + dump
+                key_obj.set_contents_from_filename(dump)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
